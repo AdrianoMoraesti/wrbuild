@@ -214,3 +214,29 @@ select {
   .modal { align-items: center; }
   .folha { border-radius: 18px; border-bottom: 1px solid var(--borda); }
 }
+
+/* árvore de runas */
+.arv-runas { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.arv-bloco small { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--suave); margin-bottom: 4px; }
+.arv-bloco small img { width: 16px; height: 16px; }
+.arv-ic { width: 18px; height: 18px; }
+.regra { font-size: 13px; color: var(--suave); margin: 0 0 4px; }
+.secao small { color: var(--suave); letter-spacing: 0; font-weight: 400; }
+.linha-runa { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+.linha-runa .num { flex: none; width: 20px; height: 20px; border-radius: 10px; background: var(--painel2); color: var(--suave); font-size: 11px; display: flex; align-items: center; justify-content: center; }
+.linha-runa .escolhas { flex: 1; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.escolhas .ico.redondo.sel img { outline: 3px solid var(--ouro); outline-offset: -3px; }
+.escolhas .ico.redondo:not(.sel) img { filter: saturate(.5) brightness(.75); }
+.escolhas .ico.sel span { color: var(--ouro2); }
+
+/* habilidades */
+.hab-abas { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.hab-aba { flex: none; border: 0; background: none; padding: 0; cursor: pointer; color: var(--suave); font-size: 11px; text-align: center; }
+.hab-aba img, .hab-aba .sem { width: 52px; height: 52px; border-radius: 10px; border: 2px solid var(--borda); margin-bottom: 3px; }
+.hab-aba.on img { border-color: var(--ouro); }
+.hab-aba.on span { color: var(--ouro); font-weight: 700; }
+.hab { margin-top: 10px; }
+.hab-cab { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.hab-video { margin-bottom: 8px; border-radius: var(--raio); overflow: hidden; background: #000; border: 1px solid var(--borda); }
+.hab-video video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; }
+.hab-off { padding: 14px; font-size: 13px; color: var(--suave); }

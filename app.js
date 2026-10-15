@@ -9,6 +9,14 @@
   var ELOS = M.elos || {};
   var SECOES = { inicial: 'Item inicial', principais: 'Itens importantes', botas: 'Botas', final: 'Build final', situacionais: 'Situacionais' };
   var CHAVE = 'wrbuild.builds.v1';
+  /* árvore de runas do jogo: 1 essencial + 3 da árvore principal (1 por linha) + 1 de outra árvore */
+  var ARV = M.arvores || { essenciais: [], arvores: [], principal: 3, secundaria: 1 };
+  var ESS = {}, ARV_DE = {}, LINHA_DE = {}, ARV_K = {};
+  ARV.essenciais.forEach(function (id) { ESS[id] = 1; });
+  ARV.arvores.forEach(function (a) {
+    ARV_K[a.k] = a;
+    a.linhas.forEach(function (l, i) { l.forEach(function (id) { ARV_DE[id] = a.k; LINHA_DE[id] = i; }); });
+  });
   var IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   var tela = document.getElementById('tela');
   var modal = document.getElementById('modal');
@@ -190,6 +198,11 @@
       }).join('') + '</div>';
     }
 
+    if (c.skills.length) {
+      html += '<h2 class="secao">Habilidades</h2><div class="hab-abas" id="habAbas">' + c.skills.map(function (s, i) {
+        return '<button class="hab-aba' + (i === 0 ? ' on' : '') + '" data-hab="' + i + '">' + img(s.i, s.n) + '<span>' + rotuloSkill(s.k) + '</span></button>';
+      }).join('') + '</div><div class="hab" id="hab"></div>';
+    }
     html += '<h2 class="secao">Builds prontas</h2>';
     if (!c.guias.length) html += '<div class="vazio">Este campeão ainda não tem build no site. Monte a sua!</div>';
     else {
@@ -205,6 +218,20 @@
     var meus = minhas().filter(function (b) { return b.campeao === c.id; });
     if (meus.length) html += '<h2 class="secao">Suas builds de ' + esc(c.n) + '</h2>' + meus.map(cartaoMinha).join('');
     tela.innerHTML = html;
+    if (c.skills.length) {
+      var mostraHab = function (i, tocar) {
+        var s = c.skills[i];
+        document.querySelectorAll('#habAbas .hab-aba').forEach(function (b) { b.classList.toggle('on', +b.dataset.hab === i); });
+        document.getElementById('hab').innerHTML = '<div class="hab-cab"><b>' + esc(s.n) + '</b><span class="tag">' + rotuloSkill(s.k, true) + '</span></div>' +
+          (s.v ? '<div class="hab-video"><video src="' + esc(s.v) + '" muted loop playsinline controls preload="none"' + (tocar ? ' autoplay' : '') + '></video>' +
+            '<div class="hab-off" hidden>O vídeo da habilidade vem do site oficial do Wild Rift e precisa de internet.</div></div>' : '') +
+          '<div class="desc">' + (s.d || 'Sem descrição.') + '</div>';
+        var v = document.querySelector('#hab video');
+        if (v) v.onerror = function () { v.hidden = true; v.nextElementSibling.hidden = false; };
+      };
+      mostraHab(0, false);
+      document.getElementById('habAbas').onclick = function (e) { var b = e.target.closest('[data-hab]'); if (b) mostraHab(+b.dataset.hab, true); };
+    }
     document.getElementById('elo').value = estado.elo;
     document.getElementById('elo').onchange = function () { estado.elo = this.value; guardaPref(); vCampeao(id, guiaId); };
     ligaInfo(tela);
@@ -231,7 +258,7 @@
       h += '<div class="bloco"><h3>' + SECOES[sec] + (sec === 'final' ? ' · <span class="preco">' + moeda(custo(l)) + '</span>' : '') + '</h3><div class="icones">' +
         l.map(function (id) { return icoItem(id); }).join('') + '</div></div>';
     });
-    if (g.runas.length) h += '<div class="bloco"><h3>Runas</h3><div class="icones">' + g.runas.map(icoRuna).join('') + '</div></div>';
+    if (g.runas.length) h += '<div class="bloco"><h3>Runas</h3>' + runasHtml(g.runas) + '</div>';
     if (g.feiticos.length) h += '<div class="bloco"><h3>Feitiços</h3><div class="icones">' + g.feiticos.map(icoFeitico).join('') + '</div></div>';
     if (g.skills.length) h += '<div class="bloco"><h3>Ordem de habilidades</h3>' + skillsHtml(c, g.skills) + '</div>';
     if (g.fortes.length || g.fracos.length) {
@@ -253,10 +280,51 @@
     });
     return h + '</div>';
   }
+  function rotuloSkill(k, longo) {
+    return { P: 'Passiva', '1': longo ? '1ª habilidade' : '1ª', '2': longo ? '2ª habilidade' : '2ª', '3': longo ? '3ª habilidade' : '3ª', '4': longo ? 'Ultimate' : 'Ult' }[k] || k;
+  }
   function custo(l) { return l.reduce(function (s, id) { return s + ((I[id] || {}).p || 0); }, 0); }
   function icoItem(id) {
     var it = I[id] || { n: 'Item ' + id };
     return '<a class="ico" href="#/i/' + id + '">' + img(it.i, it.n) + '<span>' + esc(it.n) + '</span></a>';
+  }
+  /* separa uma lista de runas em essencial / principal / secundária (dica: árvores já escolhidas) */
+  function organizaRunas(lista, dica) {
+    var o = { ess: null, prim: (dica || {}).p || null, primSel: [], sec: (dica || {}).s || null, secSel: null, outras: [] };
+    var nArv = {};
+    (lista || []).forEach(function (id) {
+      id = +id;
+      if (ESS[id]) { if (o.ess == null) o.ess = id; else o.outras.push(id); }
+      else if (ARV_DE[id]) nArv[ARV_DE[id]] = (nArv[ARV_DE[id]] || 0) + 1;
+      else o.outras.push(id);
+    });
+    if (!o.prim || !ARV_K[o.prim]) {
+      o.prim = null;
+      Object.keys(nArv).forEach(function (k) { if (!o.prim || nArv[k] > nArv[o.prim]) o.prim = k; });
+    }
+    var linhas = ((ARV_K[o.prim] || {}).linhas || []).map(function () { return null; });
+    (lista || []).forEach(function (id) {
+      id = +id;
+      if (ARV_DE[id] === o.prim && linhas[LINHA_DE[id]] === null) linhas[LINHA_DE[id]] = id;
+      else if (ARV_DE[id] && ARV_DE[id] !== o.prim && o.secSel == null && (!o.sec || o.sec === ARV_DE[id])) { o.secSel = id; o.sec = ARV_DE[id]; }
+    });
+    o.primSel = linhas;
+    if (o.sec === o.prim) { o.sec = null; o.secSel = null; }
+    return o;
+  }
+  function listaRunas(o) {
+    return [o.ess].concat(o.primSel, [o.secSel]).filter(function (x) { return x != null; });
+  }
+  function runasHtml(lista, dica) {
+    var o = organizaRunas(lista, dica);
+    var h = '<div class="arv-runas">';
+    if (o.ess != null) h += '<div class="arv-bloco"><small>Essencial</small><div class="icones">' + icoRuna(o.ess) + '</div></div>';
+    var p = ARV_K[o.prim], sel = o.primSel.filter(function (x) { return x != null; });
+    if (p && sel.length) h += '<div class="arv-bloco"><small>' + (p.i ? '<img src="' + esc(p.i) + '" alt="">' : '') + 'Principal · ' + esc(p.n) + '</small><div class="icones">' + sel.map(icoRuna).join('') + '</div></div>';
+    var sc = ARV_K[o.sec];
+    if (sc && o.secSel != null) h += '<div class="arv-bloco"><small>' + (sc.i ? '<img src="' + esc(sc.i) + '" alt="">' : '') + 'Secundária · ' + esc(sc.n) + '</small><div class="icones">' + icoRuna(o.secSel) + '</div></div>';
+    if (o.outras.length) h += '<div class="arv-bloco"><small>Outras</small><div class="icones">' + o.outras.map(icoRuna).join('') + '</div></div>';
+    return h + '</div>';
   }
   function icoRuna(id) {
     var r = R[id] || { n: '?' };
@@ -354,7 +422,8 @@
     b.nome = (g.titulo || 'Build') + (g.rota ? ' ' + ROTAS[g.rota] : '');
     var base = g.builds.final.length ? g.builds.final : g.builds.principais.concat(g.builds.botas);
     b.itens = base.slice(0, 6);
-    b.runas = g.runas.slice(0, 5); b.feiticos = g.feiticos.slice(0, 2); b.origem = g.id;
+    var o = organizaRunas(g.runas);
+    b.runas = listaRunas(o); b.arvores = { p: o.prim, s: o.sec }; b.feiticos = g.feiticos.slice(0, 2); b.origem = g.id;
     return b;
   }
   var rasc = null;
@@ -388,7 +457,7 @@
       '<h2 class="secao">Itens (até 6)</h2><div class="slots" id="slots">' + slots + '</div>' +
       '<div class="resumo"><span>' + (Object.keys(atr).map(function (a) { return a + (atr[a] > 1 ? ' ×' + atr[a] : ''); }).join(' · ') || 'Toque num espaço para escolher o item') + '</span>' +
       '<span class="preco">' + moeda(custo(b.itens)) + '</span></div>' +
-      '<h2 class="secao">Runas</h2><div class="icones" id="runasB">' + b.runas.map(icoRuna).join('') +
+      '<h2 class="secao">Runas</h2>' + (b.runas.length ? runasHtml(b.runas, b.arvores) : '') + '<div class="icones" id="runasB">' +
       '<button class="btn" id="runasBtn">' + (b.runas.length ? 'Trocar' : 'Escolher runas') + '</button></div>' +
       '<h2 class="secao">Feitiços</h2><div class="icones" id="feitB">' + b.feiticos.map(icoFeitico).join('') +
       '<button class="btn" id="feitBtn">' + (b.feiticos.length ? 'Trocar' : 'Escolher feitiços') + '</button></div>' +
@@ -490,28 +559,63 @@
     };
   }
   function escolheRunas() {
-    var sel = rasc.runas.slice();
-    var porTipo = {};
-    Object.keys(R).forEach(function (id) { (porTipo[R[id].t] = porTipo[R[id].t] || []).push(id); });
-    abreModal('Runas (até 5)', Object.keys(porTipo).sort().map(function (t) {
-      return '<div class="grupo-runa"><h2 class="secao">' + esc((M.tiposRuna || {})[t] || 'Outras') + '</h2><div class="escolhas">' + porTipo[t].map(function (id) {
-        return '<div class="ico redondo" data-r="' + id + '">' + img(R[id].i, R[id].n) + '<span>' + esc(R[id].n) + '</span></div>';
-      }).join('') + '</div></div>';
-    }).join('') + '<div class="botoes"><button class="btn pri cheio" id="ok">Usar <span id="nsel"></span></button></div>');
-    var corpo = modal.querySelector('.folha-corpo');
-    function marca() {
-      corpo.querySelectorAll('[data-r]').forEach(function (el) { el.classList.toggle('sel', sel.indexOf(+el.dataset.r) >= 0); });
-      document.getElementById('nsel').textContent = '(' + sel.length + '/5)';
+    var o = organizaRunas(rasc.runas, rasc.arvores);
+    var nP = ARV.principal || 3, nS = ARV.secundaria || 1;
+    function icoSel(id, sel, attr) {
+      var r = R[id] || { n: '?' };
+      return '<div class="ico redondo' + (sel ? ' sel' : '') + '" ' + attr + '>' + img(r.i, r.n) + '<span>' + esc(r.n) + '</span></div>';
     }
-    marca();
-    corpo.onclick = function (e) {
-      var x = e.target.closest('[data-r]');
-      if (x) {
-        var id = +x.dataset.r, i = sel.indexOf(id);
-        if (i >= 0) sel.splice(i, 1); else if (sel.length < 5) sel.push(id); else aviso('Máximo de 5 runas');
-        marca();
+    function chipsArv(sel, proibida, attr) {
+      return '<div class="chips">' + ARV.arvores.map(function (a) {
+        if (a.k === proibida) return '';
+        return '<button class="chip' + (a.k === sel ? ' on' : '') + '" ' + attr + '="' + a.k + '">' + (a.i ? '<img class="arv-ic" src="' + esc(a.i) + '" alt="">' : '') + esc(a.n) + '</button>';
+      }).join('') + '</div>';
+    }
+    function linhasHtml(arv, marcado, attr) {
+      return arv.linhas.map(function (l, i) {
+        return '<div class="linha-runa"><span class="num">' + (i + 1) + '</span><div class="escolhas">' +
+          l.map(function (id) { return icoSel(id, marcado(id, i), attr + '="' + id + '"'); }).join('') + '</div></div>';
+      }).join('');
+    }
+    function desenha() {
+      var nPrim = o.primSel.filter(function (x) { return x != null; }).length;
+      var h = '<p class="regra">1 runa essencial · ' + nP + ' da árvore principal (uma por linha) · ' + nS + ' de outra árvore</p>' +
+        '<h2 class="secao">Essencial <small>' + (o.ess != null ? 1 : 0) + '/1</small></h2><div class="escolhas">' +
+        ARV.essenciais.map(function (id) { return icoSel(id, o.ess === id, 'data-ess="' + id + '"'); }).join('') + '</div>' +
+        '<h2 class="secao">Árvore principal <small>' + nPrim + '/' + nP + '</small></h2>' + chipsArv(o.prim, null, 'data-parv');
+      var p = ARV_K[o.prim];
+      h += p ? linhasHtml(p, function (id, i) { return o.primSel[i] === id; }, 'data-prim') : '<div class="vazio">Escolha a árvore principal.</div>';
+      h += '<h2 class="secao">Árvore secundária <small>' + (o.secSel != null ? 1 : 0) + '/' + nS + '</small></h2>';
+      if (!p) h += '<div class="vazio">Escolha antes a árvore principal.</div>';
+      else {
+        h += chipsArv(o.sec, o.prim, 'data-sarv');
+        var sc = ARV_K[o.sec];
+        if (sc) h += linhasHtml(sc, function (id) { return o.secSel === id; }, 'data-sec');
       }
-      if (e.target.closest('#ok')) { rasc.runas = sel; salvaRascunho(); fechaModal(); desenhaMontar(); }
+      h += '<div class="botoes"><button class="btn cheio" id="limparR">Limpar</button><button class="btn pri cheio" id="ok">Usar (' +
+        listaRunas(o).length + '/' + (1 + nP + nS) + ')</button></div>';
+      corpo.innerHTML = h;
+    }
+    abreModal('Runas', '');
+    var corpo = modal.querySelector('.folha-corpo');
+    desenha();
+    corpo.onclick = function (e) {
+      var x;
+      if ((x = e.target.closest('[data-ess]'))) { var id = +x.dataset.ess; o.ess = o.ess === id ? null : id; }
+      else if ((x = e.target.closest('[data-parv]'))) {
+        if (o.prim !== x.dataset.parv) { o.prim = x.dataset.parv; o.primSel = ARV_K[o.prim].linhas.map(function () { return null; }); }
+        if (o.sec === o.prim) { o.sec = null; o.secSel = null; }
+      }
+      else if ((x = e.target.closest('[data-prim]'))) { var pid = +x.dataset.prim, li = LINHA_DE[pid]; o.primSel[li] = o.primSel[li] === pid ? null : pid; }
+      else if ((x = e.target.closest('[data-sarv]'))) { if (o.sec !== x.dataset.sarv) { o.sec = x.dataset.sarv; o.secSel = null; } }
+      else if ((x = e.target.closest('[data-sec]'))) { var sid = +x.dataset.sec; o.secSel = o.secSel === sid ? null : sid; }
+      else if (e.target.closest('#limparR')) { o = organizaRunas([]); }
+      else if (e.target.closest('#ok')) {
+        if (o.ess == null) { aviso('Escolha a runa essencial'); return; }
+        rasc.runas = listaRunas(o); rasc.arvores = { p: o.prim, s: o.sec };
+        salvaRascunho(); fechaModal(); desenhaMontar(); return;
+      } else return;
+      var rol = corpo.scrollTop; desenha(); corpo.scrollTop = rol;
     };
   }
   function escolheFeiticos() {
