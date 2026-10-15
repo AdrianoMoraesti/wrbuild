@@ -773,6 +773,9 @@
 
   // versão iPhone (PWA): o service worker guarda o app inteiro para funcionar sem internet
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol) && !window.Nativo) {
-    navigator.serviceWorker.register('sw.js').catch(function () { /* sem sw.js no modo de desenvolvimento */ });
+    navigator.serviceWorker.register('sw.js').then(function () {
+      // a cada abertura, termina de guardar as imagens que ainda faltam (se o app foi fechado no meio)
+      return navigator.serviceWorker.ready;
+    }).then(function (r) { if (r.active) r.active.postMessage('completar'); }).catch(function () { /* sem sw.js no modo de desenvolvimento */ });
   }
 })();
