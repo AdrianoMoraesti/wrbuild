@@ -88,6 +88,7 @@
     [/^#\/i\/(\d+)$/, vItem, 'itens'],
     [/^#\/montar(?:\/([\w-]+))?$/, vMontar, 'montar'],
     [/^#\/minhas$/, vMinhas, 'minhas'],
+    [/^#\/calc(?:\/([^/]+))?$/, vCalc, 'calc'],
   ];
   function navegar() {
     fechaModal();
@@ -203,6 +204,7 @@
         return '<button class="hab-aba' + (i === 0 ? ' on' : '') + '" data-hab="' + i + '">' + img(s.i, s.n) + '<span>' + rotuloSkill(s.k) + '</span></button>';
       }).join('') + '</div><div class="hab" id="hab"></div>';
     }
+    html += confrontosHtml(c);
     html += '<h2 class="secao">Builds prontas</h2>';
     if (!c.guias.length) html += '<div class="vazio">Este campeão ainda não tem build no site. Monte a sua!</div>';
     else {
@@ -214,7 +216,8 @@
     }
     html += '<div class="botoes">' +
       (g ? '<button class="btn pri cheio" id="usar">Personalizar esta build</button><button class="btn cheio" id="printG">Gerar print</button>'
-        : '<a class="btn pri cheio" href="#/montar">Montar build</a>') + '</div>';
+        : '<a class="btn pri cheio" href="#/montar">Montar build</a>') + '</div>' +
+      (c.calc ? '<div class="botoes"><button class="btn cheio" id="calcG">Calcular dano desta build</button></div>' : '');
     var meus = minhas().filter(function (b) { return b.campeao === c.id; });
     if (meus.length) html += '<h2 class="secao">Suas builds de ' + esc(c.n) + '</h2>' + meus.map(cartaoMinha).join('');
     tela.innerHTML = html;
@@ -242,6 +245,7 @@
       };
       document.getElementById('printG').onclick = function () { abrePrint(deGuia(c, g)); };
     }
+    if (c.calc) document.getElementById('calcG').onclick = function () { var b = g ? deGuia(c, g) : null; abreCalc(c.id, b && b.itens, b && b.runas); };
     ligaCartoes(tela);
   }
 
@@ -281,6 +285,7 @@
     return h + '</div>';
   }
   function rotuloSkill(k, longo) {
+    if (k === 'auto_attack') return 'Ataque';
     return { P: 'Passiva', '1': longo ? '1ª habilidade' : '1ª', '2': longo ? '2ª habilidade' : '2ª', '3': longo ? '3ª habilidade' : '3ª', '4': longo ? 'Ultimate' : 'Ult' }[k] || k;
   }
   function custo(l) { return l.reduce(function (s, id) { return s + ((I[id] || {}).p || 0); }, 0); }
@@ -399,7 +404,9 @@
     var meus = minhas().filter(function (b) { return (b.itens || []).indexOf(+id) >= 0; });
     tela.innerHTML =
       '<div class="item-cab">' + img(it.i, it.n) + '<div><h1>' + esc(it.n) + '</h1><span class="preco">' + moeda(it.p) + ' de ouro</span>' +
-      '<div class="tags">' + (it.a || []).map(function (a) { return '<span class="tag">' + esc(a) + '</span>'; }).join('') + '</div></div></div>' +
+      '<div class="tags">' + ((M.fire || {}).tierItens && M.fire.tierItens[id] ? '<span class="tag">Tier <b class="tier-' + M.fire.tierItens[id] + '">' + M.fire.tierItens[id] + '</b> · wildriftfire</span>' : '') +
+      (it.a || []).map(function (a) { return '<span class="tag">' + esc(a) + '</span>'; }).join('') + '</div></div></div>' +
+      (it.calc && it.calc.nota ? '<p class="regra">Calculadora: ' + esc(it.calc.nota) + '</p>' : '') +
       '<div class="desc">' + (it.d || 'Sem descrição.') + '</div>' +
       '<h2 class="secao">Campeões que usam (' + ids.length + ')</h2>' +
       (ids.length ? '<div class="uso">' + ids.map(function (cid) {
@@ -466,6 +473,7 @@
       '<div class="campo"><label for="notas">Observações</label><input id="notas" maxlength="120" placeholder="Opcional" value="' + esc(b.notas) + '"></div>' +
       '<div class="botoes"><button class="btn pri cheio" id="salvar">' + (b.id ? 'Salvar alterações' : 'Salvar build') + '</button>' +
       '<button class="btn cheio" id="printB">Gerar print</button></div>' +
+      (c && c.calc ? '<div class="botoes"><button class="btn cheio" id="calcB">Calcular dano desta build</button></div>' : '') +
       (b.id ? '<div class="botoes"><button class="btn cheio" id="copiar">Duplicar</button><button class="btn perigo cheio" id="apagar">Excluir</button></div>' : '<div class="botoes"><button class="btn cheio" id="limpar">Limpar</button></div>');
 
     document.getElementById('campBtn').onclick = escolheCampeao;
@@ -493,6 +501,7 @@
       abrePrint(b);
     };
     var el;
+    if ((el = document.getElementById('calcB'))) el.onclick = function () { abreCalc(b.campeao, b.itens, b.runas); };
     if ((el = document.getElementById('limpar'))) el.onclick = function () { rasc = novaBuild(); salvaRascunho(); desenhaMontar(); };
     if ((el = document.getElementById('copiar'))) el.onclick = function () {
       var n = JSON.parse(JSON.stringify(b)); n.id = ''; n.nome = b.nome + ' (cópia)'; rasc = n; salvaRascunho(); location.hash = '#/montar/rascunho';
@@ -873,10 +882,352 @@
     document.getElementById('compImg').onclick = function () { exporta(true); };
   }
 
+  /* ---------- Calculadora de dano ---------- */
+  var TIPO_DANO = { f: 'Físico', m: 'Mágico', v: 'Verdadeiro', cura: 'Cura', escudo: 'Escudo', adapt: 'Adaptativo' };
+  var CHAVE_CALC = 'wrbuild.calc';
+  function f0(v) { return v == null || isNaN(v) ? '—' : Math.round(v).toLocaleString('pt-BR'); }
+  function f1(v) { return v == null || isNaN(v) ? '—' : (Math.round(v * 10) / 10).toLocaleString('pt-BR'); }
+  function f2(v) { return v == null || isNaN(v) ? '—' : (Math.round(v * 100) / 100).toLocaleString('pt-BR'); }
+
+  /** Build padrão de um campeão: itens finais (ou principais + botas) e runas do 1º guia. */
+  function buildPadrao(c, rota) {
+    var g = (c.guias || []).filter(function (x) { return !rota || +x.rota === +rota; })[0] || (c.guias || [])[0];
+    if (!g) return { itens: [], runas: [] };
+    var base = g.builds.final.length ? g.builds.final : g.builds.principais.concat(g.builds.botas);
+    return { itens: base.slice(0, 6).map(Number), runas: listaRunas(organizaRunas(g.runas)).map(Number) };
+  }
+  function lado(c, nivel) {
+    var b = buildPadrao(c);
+    return { c: c.id, nivel: nivel || 15, itens: b.itens, runas: b.runas };
+  }
+  function lerCalc() {
+    var s = null;
+    try { s = JSON.parse(sessionStorage.getItem(CHAVE_CALC)); } catch (e) { }
+    return s && s.a ? s : null;
+  }
+  function gravaCalc(s) { try { sessionStorage.setItem(CHAVE_CALC, JSON.stringify(s)); } catch (e) { } }
+  /** Abre a calculadora já com uma build (das telas de campeão/montar). */
+  function abreCalc(campId, itens, runas) {
+    var s = lerCalc() || {};
+    var c = C[campId]; if (!c) return;
+    s.a = lado(c, (s.a && s.a.nivel) || 15);
+    if (itens) s.a.itens = itens.map(Number);
+    if (runas) s.a.runas = runas.map(Number);
+    if (!s.b || !C[s.b.c]) {
+      var alvo = ((c.fire || {}).counters || [])[0];
+      s.b = lado(C[alvo && C[alvo.id] ? alvo.id : (c.id === 'Garen' ? 'Darius' : 'Garen')] || D.campeoes[0], s.a.nivel);
+    }
+    s.desl = {}; s.cond = {}; s.ranks = null;
+    gravaCalc(s);
+    location.hash = '#/calc';
+  }
+  function itensCalc(l) { return (l || []).map(function (id) { var it = I[id]; return it && it.calc ? { n: it.n, st: it.calc.st, ef: it.calc.ef } : null; }).filter(Boolean); }
+  function runasCalc(l) { return (l || []).map(function (id) { var r = R[id]; return r && r.calc ? { n: r.n, st: r.calc.st, ef: r.calc.ef } : null; }).filter(Boolean); }
+  function campCalc(c) { return Object.assign({ adapt: null }, c.calc || {}); }
+
+  function rodaCalc(s, inverso) {
+    var A = inverso ? s.b : s.a, B = inverso ? s.a : s.b;
+    var ca = C[A.c], cb = C[B.c];
+    return WRCalc.calcular({
+      atk: { camp: campCalc(ca), nivel: A.nivel, itens: itensCalc(A.itens), runas: runasCalc(A.runas),
+        ranks: inverso ? null : s.ranks, ordem: (ca.calc || {}).ordem },
+      alvo: { camp: campCalc(cb), nivel: B.nivel, itens: itensCalc(B.itens), runas: runasCalc(B.runas) },
+      desligados: inverso ? {} : s.desl, condicoes: inverso ? {} : s.cond,
+      autos: s.autos == null ? 2 : s.autos, ignite: inverso ? false : !!s.ignite,
+      vidaAlvo: inverso ? 100 : (s.vida == null ? 100 : s.vida), stacksCheios: s.stacks !== false
+    });
+  }
+
+  function vCalc(campId) {
+    var s = lerCalc();
+    if (campId && C[campId]) { abreCalc(campId); return; }
+    if (!s) {
+      var ini = D.campeoes.filter(function (c) { return c.calc; });
+      if (!ini.length) { tela.innerHTML = '<div class="vazio">Dados da calculadora indisponíveis.</div>'; return; }
+      s = { a: lado(C.Ahri || ini[0], 15), b: lado(C.Garen || ini[1] || ini[0], 15), autos: 2, vida: 100, desl: {}, cond: {} };
+      gravaCalc(s);
+    }
+    desenhaCalc(s);
+  }
+
+  function slotsHtml(lista, papel) {
+    var h = '<div class="slots">';
+    for (var i = 0; i < 6; i++) {
+      var it = I[lista[i]];
+      h += '<div class="slot' + (it ? ' cheio' : '') + '" data-' + papel + '="' + i + '">' + (it ? img(it.i, it.n) + '<span class="x" data-tira-' + papel + '="' + i + '">×</span>' : '+') + '</div>';
+    }
+    return h + '</div>';
+  }
+  function ladoHtml(s, papel, titulo) {
+    var L = s[papel], c = C[L.c];
+    return '<div class="calc-lado">' +
+      '<div class="escolhe-camp" data-camp="' + papel + '">' + img(c.i, c.n) + '<div><small>' + titulo + '</small><b>' + esc(c.n) + '</b></div>' +
+      '<div class="nivel"><label for="nv' + papel + '">Nível <b id="nvt' + papel + '">' + L.nivel + '</b></label>' +
+      '<input type="range" min="1" max="15" value="' + L.nivel + '" id="nv' + papel + '"></div></div>' +
+      slotsHtml(L.itens, papel) +
+      '<div class="calc-runas" data-runas="' + papel + '">' + (L.runas.length ? L.runas.map(function (id) {
+        var r = R[id]; return r ? '<span class="mini-runa' + (r.calc ? '' : ' sem-dado') + '" title="' + esc(r.n) + '">' + img(r.i, r.n) + '</span>' : '';
+      }).join('') : '<small>Sem runas</small>') + '<button class="chip" data-runas-btn="' + papel + '">Runas</button>' +
+      '<button class="chip" data-padrao="' + papel + '">Build pronta</button></div></div>';
+  }
+
+  function desenhaCalc(s) {
+    var r = rodaCalc(s), inv = rodaCalc(s, true);
+    var ca = C[s.a.c], cb = C[s.b.c], A = r.atk, B = r.alvo;
+    var semDados = !(ca.calc && ca.calc.hab && ca.calc.hab.some(function (h) { return h.comps && h.comps.length; }));
+    var semItens = s.a.itens.concat(s.b.itens).filter(function (id) { return I[id] && !I[id].calc; }).length;
+    var pctBarra = Math.min(100, r.combo.pct);
+    var h = '<h2 class="secao" style="margin-top:4px">Calculadora de dano</h2>' +
+      '<div class="calc-duelo">' + ladoHtml(s, 'a', 'Atacante') + '<button class="troca" id="trocar" aria-label="Inverter atacante e alvo">⇄</button>' + ladoHtml(s, 'b', 'Alvo') + '</div>';
+
+    // opções do combo
+    h += '<div class="calc-opcoes">' +
+      '<label>Ataques básicos no combo <select id="autos">' + [0, 1, 2, 3, 4, 5, 6].map(function (n) { return '<option' + ((s.autos == null ? 2 : s.autos) === n ? ' selected' : '') + '>' + n + '</option>'; }).join('') + '</select></label>' +
+      '<label>Vida do alvo <b id="vidat">' + (s.vida == null ? 100 : s.vida) + '%</b><input type="range" min="5" max="100" step="5" value="' + (s.vida == null ? 100 : s.vida) + '" id="vida"></label>' +
+      '<label class="tog"><input type="checkbox" id="ignite"' + (s.ignite ? ' checked' : '') + '> Incendiar</label>' +
+      '<label class="tog"><input type="checkbox" id="stacks"' + (s.stacks !== false ? ' checked' : '') + '> Acúmulos cheios (Conquistador etc.)</label></div>';
+
+    // resultado principal
+    h += '<div class="calc-total' + (r.combo.mata ? ' mata' : '') + '"><div class="cab"><span>Combo de ' + esc(ca.n) + ' em ' + esc(cb.n) + '</span>' +
+      '<b>' + (r.combo.mata ? 'ABATE' : f0(r.combo.pct) + '% da vida') + '</b></div>' +
+      '<div class="big">' + f0(r.combo.dano) + ' <small>de ' + f0(r.combo.vidaAlvo) + ' de vida</small></div>' +
+      '<div class="barra-vida"><i style="width:' + pctBarra + '%"></i></div>' +
+      (r.combo.cura || r.combo.escudo ? '<div class="sub">' + (r.combo.cura ? 'Cura ' + f0(r.combo.cura) + ' ' : '') + (r.combo.escudo ? '· Escudo ' + f0(r.combo.escudo) : '') + '</div>' : '') +
+      '<div class="sub">Troca inversa: ' + esc(cb.n) + ' tiraria <b>' + f0(inv.combo.pct) + '%</b> da vida de ' + esc(ca.n) + ' com a build pronta e o mesmo nº de ataques. ' +
+      (r.combo.pct > inv.combo.pct * 1.15 ? '<b class="bom">Vantagem de ' + esc(ca.n) + '</b>' : inv.combo.pct > r.combo.pct * 1.15 ? '<b class="ruim">Vantagem de ' + esc(cb.n) + '</b>' : '<b>Troca equilibrada</b>') + '</div></div>';
+    if (semDados) h += '<div class="vazio">As habilidades deste campeão ainda não têm números curados; o cálculo usa só ataques e itens.</div>';
+    if (semItens) h += '<div class="regra">' + semItens + ' item(ns) sem dados de atributos ficaram fora da conta.</div>';
+
+    // habilidades
+    var rk = r.ranks;
+    h += '<h2 class="secao">Habilidades <small>· toque no valor para ver a conta</small></h2>';
+    r.habs.forEach(function (hb) {
+      var sk = (ca.skills || []).filter(function (x) { return x.k === hb.k; })[0];
+      h += '<div class="calc-hab"><div class="hab-l">' + (sk ? img(sk.i, sk.n) : '<div class="sem">' + esc(hb.k) + '</div>') +
+        '<div class="nm"><b>' + esc(hb.n || '') + '</b><small>' + rotuloSkill(hb.k, true) + (hb.cd ? ' · recarga ' + f1(hb.cd.final) + 's' + (hb.cd.final < hb.cd.base ? ' <s>' + f1(hb.cd.base) + '</s>' : '') : '') + '</small></div>' +
+        (hb.k !== 'P' ? '<div class="rank" data-k="' + hb.k + '"><button data-d="-1" aria-label="Diminuir rank">−</button><span>' + (rk[hb.k] || 0) + '/' + (hb.k === '4' ? 3 : 4) + '</span><button data-d="1" aria-label="Aumentar rank">+</button></div>' : '') + '</div>';
+      if (!hb.comps.length) h += '<div class="comp vazio-c">' + (hb.obs ? esc(hb.obs) : 'Sem dano numérico.') + '</div>';
+      hb.comps.forEach(function (cp) {
+        if (cp.bloqueado) { h += '<div class="comp off"><span class="t">' + esc(cp.rot) + '</span><span class="v">rank 0</span></div>'; return; }
+        h += '<div class="comp' + (cp.ligado ? '' : ' off') + '"><label class="tog"><input type="checkbox" data-comp="' + esc(cp.id) + '"' + (cp.ligado ? ' checked' : '') + '>' +
+          '<span class="t">' + esc(cp.rot) + ' <i class="tipo-' + cp.t + '">' + (TIPO_DANO[cp.t] || cp.t) + '</i></span></label>' +
+          '<button class="v" data-conta>' + f0(cp.final) + '</button>' +
+          '<div class="conta" hidden>Bruto ' + f1(cp.bruto) + ' = ' + esc(cp.conta) +
+          (cp.resist != null ? '<br>× ' + f2(cp.mult) + ' (resistência efetiva ' + f1(cp.resist) + ')' : cp.mult && cp.mult !== 1 ? '<br>× ' + f2(cp.mult) : '') +
+          (cp.nota ? '<br><i>' + esc(cp.nota) + '</i>' : '') + '</div></div>';
+      });
+      if (hb.obs && hb.comps.length) h += '<div class="regra">' + esc(hb.obs) + '</div>';
+      if (hb.txt) h += '<details class="orig"><summary>Texto original (inglês)</summary>' + esc(hb.txt) + '</details>';
+      h += '</div>';
+    });
+
+    // procs de itens/runas e condições
+    if (r.procs.length || r.condicoes.length) {
+      h += '<h2 class="secao">Itens e runas</h2><div class="calc-hab">';
+      r.procs.forEach(function (p) {
+        h += '<div class="comp' + (p.ligado ? '' : ' off') + '"><label class="tog"><input type="checkbox" data-cond="' + esc(p.chave) + '"' + (p.ligado ? ' checked' : '') + '>' +
+          '<span class="t">' + esc(p.de) + (p.nome ? ' · ' + esc(p.nome) : '') + ' <i class="tipo-' + p.t + '">' + (TIPO_DANO[p.t] || p.t) + '</i></span></label>' +
+          '<button class="v" data-conta>' + f0(p.total) + '</button><div class="conta" hidden>' + f0(p.unid) + ' por ativação × ' + p.vezes +
+          ' (' + ({ ataque: 'cada ataque', ataque_n: 'a cada N ataques', ataque_apos_hab: 'ataque após habilidade', habilidade: '1× no combo', unico: '1× no combo' }[p.gatilho] || p.gatilho) + ')<br>' + esc(p.conta) + '</div></div>';
+      });
+      r.condicoes.forEach(function (c2) {
+        h += '<div class="comp' + (c2.ligado ? '' : ' off') + '"><label class="tog"><input type="checkbox" data-cond="' + esc(c2.chave) + '"' + (c2.ligado ? ' checked' : '') + '>' +
+          '<span class="t">' + esc(c2.de) + ': +' + f1(c2.pct) + '% de dano' + (c2.cond ? ' <i>(' + esc(c2.cond) + ')</i>' : '') + '</span></label></div>';
+      });
+      h += '</div>';
+    }
+
+    // ataques e status
+    h += '<h2 class="secao">Ataque básico</h2><div class="calc-grade">' +
+      '<div><span>Dano por ataque</span><b>' + f0(r.auto.final) + '</b><small>' + f0(r.auto.esperado) + ' bruto · crítico ' + f0(A.crit) + '% × ' + f0(r.auto.critMult * 100) + '%</small></div>' +
+      '<div><span>Vel. de ataque</span><b>' + f2(A.as) + '</b><small>+' + f0(A.asBonus) + '% bônus</small></div>' +
+      '<div><span>DPS de ataques</span><b>' + f0(r.auto.dps) + '</b><small>' + (r.auto.onHit ? 'com ' + f0(r.auto.onHit) + ' ao acertar' : 'sem efeitos ao acertar') + '</small></div>' +
+      (r.ignite ? '<div><span>Incendiar</span><b>' + f0(r.ignite) + '</b><small>verdadeiro em 5s</small></div>' : '') + '</div>';
+
+    h += '<h2 class="secao">Resistências</h2><div class="calc-grade">' +
+      '<div><span>Armadura de ' + esc(cb.n) + '</span><b>' + f0(B.arm) + ' → ' + f0(r.resist.fisica) + '</b><small>recebe ' + f0(r.resist.multF * 100) + '% do dano físico</small></div>' +
+      '<div><span>Resist. mágica</span><b>' + f0(B.mr) + ' → ' + f0(r.resist.magica) + '</b><small>recebe ' + f0(r.resist.multM * 100) + '% do dano mágico</small></div></div>';
+
+    var linhasSt = [['Vida', 'hp', f0], ['Mana', 'mana', f0], ['Dano de ataque', 'ad', f0], ['Poder de habilidade', 'ap', f0],
+      ['Armadura', 'arm', f0], ['Resist. mágica', 'mr', f0], ['Vel. de ataque', 'as', f2], ['Crítico %', 'crit', f0],
+      ['Aceleração', 'ah', f0], ['Pen. armadura', 'arpen', f0], ['Pen. armadura %', 'arpenp', f0], ['Pen. mágica', 'mpen', f0],
+      ['Pen. mágica %', 'mpenp', f0], ['Vel. de movimento', 'ms', f0]];
+    h += '<h2 class="secao">Atributos (nível ' + A.nivel + ' × nível ' + B.nivel + ')</h2><table class="calc-tab"><tr><th></th><th>' + esc(ca.n) + '</th><th>' + esc(cb.n) + '</th></tr>' +
+      linhasSt.map(function (l) { return '<tr><td>' + l[0] + '</td><td>' + l[2](A[l[1]]) + '</td><td>' + l[2](B[l[1]]) + '</td></tr>'; }).join('') + '</table>';
+
+    h += '<p class="regra">Fórmulas do patch ' + esc((M.fire || {}).patch || '7.3b') + ': resistência 100/(100+R); penetração aplicada na ordem redução → % → plana; crítico 200% (+30% com Gume do Infinito); ' +
+      'recarga × 100/(100+aceleração); efeitos “conforme o nível” crescem em linha reta do nível 1 ao 15. Valores das habilidades: wildriftfire.com, conferidos um a um com o texto original. ' +
+      'Não contam: escudos do alvo, cura do alvo, dano em área e posicionamento.</p>';
+    tela.innerHTML = h;
+    ligaCalc(s);
+  }
+
+  function ligaCalc(s) {
+    function muda() { gravaCalc(s); var y = window.scrollY; desenhaCalc(s); window.scrollTo(0, y); }
+    ['a', 'b'].forEach(function (p) {
+      var nv = document.getElementById('nv' + p);
+      nv.oninput = function () { document.getElementById('nvt' + p).textContent = this.value; };
+      nv.onchange = function () { s[p].nivel = +this.value; if (p === 'a') s.ranks = null; muda(); };
+    });
+    document.getElementById('trocar').onclick = function () { var t = s.a; s.a = s.b; s.b = t; s.ranks = null; s.desl = {}; s.cond = {}; muda(); };
+    document.getElementById('autos').onchange = function () { s.autos = +this.value; muda(); };
+    var vida = document.getElementById('vida');
+    vida.oninput = function () { document.getElementById('vidat').textContent = this.value + '%'; };
+    vida.onchange = function () { s.vida = +this.value; muda(); };
+    document.getElementById('ignite').onchange = function () { s.ignite = this.checked; muda(); };
+    document.getElementById('stacks').onchange = function () { s.stacks = this.checked; muda(); };
+    tela.onclick = function (e) {
+      var x;
+      if ((x = e.target.closest('[data-camp]'))) { escolheCampCalc(s, x.dataset.camp, muda); return; }
+      if ((x = e.target.closest('[data-tira-a],[data-tira-b]'))) {
+        var p = x.hasAttribute('data-tira-a') ? 'a' : 'b'; s[p].itens.splice(+x.getAttribute('data-tira-' + p), 1); muda(); return;
+      }
+      if ((x = e.target.closest('[data-a],[data-b]'))) { var p2 = x.hasAttribute('data-a') ? 'a' : 'b'; escolheItemCalc(s, p2, +x.getAttribute('data-' + p2), muda); return; }
+      if ((x = e.target.closest('[data-runas-btn]'))) { escolheRunasCalc(s, x.dataset.runasBtn, muda); return; }
+      if ((x = e.target.closest('[data-padrao]'))) { var p3 = x.dataset.padrao, bp = buildPadrao(C[s[p3].c]); s[p3].itens = bp.itens; s[p3].runas = bp.runas; muda(); return; }
+      if ((x = e.target.closest('.rank button'))) {
+        var k = x.parentNode.dataset.k, nv2 = s.a.nivel;
+        s.ranks = s.ranks || JSON.parse(JSON.stringify(WRCalc.ranksPadrao(nv2, (C[s.a.c].calc || {}).ordem)));
+        var max = k === '4' ? WRCalc.rankMaxUlt(nv2) : WRCalc.rankMaxBasica(nv2);
+        s.ranks[k] = Math.max(0, Math.min(max, (s.ranks[k] || 0) + +x.dataset.d));
+        var usados = ['1', '2', '3', '4'].reduce(function (t, q) { return t + (s.ranks[q] || 0); }, 0);
+        if (usados > nv2) { s.ranks[k]--; aviso('Pontos de habilidade esgotados no nível ' + nv2); }
+        muda(); return;
+      }
+      if ((x = e.target.closest('[data-conta]'))) { var ct = x.nextElementSibling; ct.hidden = !ct.hidden; return; }
+    };
+    tela.onchange = function (e) {
+      var x = e.target;
+      if (x.dataset.comp) { s.desl = s.desl || {}; s.desl[x.dataset.comp] = !x.checked; muda(); }
+      else if (x.dataset.cond) { s.cond = s.cond || {}; s.cond[x.dataset.cond] = x.checked; muda(); }
+    };
+  }
+
+  function escolheCampCalc(s, papel, pronto) {
+    abreModal(papel === 'a' ? 'Atacante' : 'Alvo', '<div class="busca"><input id="mq" type="search" placeholder="Buscar campeão…" autocomplete="off"></div><div class="escolhas" id="mlista"></div>');
+    var q = document.getElementById('mq');
+    function desenha() {
+      var t = norm(q.value);
+      document.getElementById('mlista').innerHTML = D.campeoes.filter(function (c) { return c.calc && (!t || norm(c.n).indexOf(t) >= 0); }).map(function (c) {
+        return '<div class="ico' + (s[papel].c === c.id ? ' sel' : '') + '" data-c="' + esc(c.id) + '">' + img(c.i, c.n) + '<span>' + esc(c.n) + '</span></div>';
+      }).join('');
+    }
+    q.oninput = desenha; desenha();
+    document.getElementById('mlista').onclick = function (e) {
+      var x = e.target.closest('[data-c]'); if (!x) return;
+      s[papel] = lado(C[x.dataset.c], s[papel].nivel);
+      if (papel === 'a') { s.ranks = null; s.desl = {}; s.cond = {}; }
+      fechaModal(); pronto();
+    };
+  }
+  function escolheItemCalc(s, papel, slot, pronto) {
+    var lista = s[papel].itens, atual = lista[slot];
+    abreModal('Item', '<div class="busca"><input id="mq" type="search" placeholder="Buscar item…" autocomplete="off"></div><div class="escolhas" id="mlista"></div>');
+    var q = document.getElementById('mq');
+    function desenha() {
+      var t = norm(q.value);
+      document.getElementById('mlista').innerHTML = Object.keys(I).filter(function (id) {
+        var it = I[id]; return it.calc && (it.p >= 900 || it.b || usoItem[id]) && (!t || norm(it.n).indexOf(t) >= 0) && !/^\[/.test(it.n);
+      }).sort(function (a, b) { return (I[b].p - I[a].p) || I[a].n.localeCompare(I[b].n); }).map(function (id) {
+        var it = I[id];
+        return '<div class="ico' + (+id === +atual ? ' sel' : '') + '" data-i="' + id + '">' + img(it.i, it.n) + '<span>' + esc(it.n) + '</span></div>';
+      }).join('') || '<div class="vazio">Nenhum item.</div>';
+    }
+    q.oninput = desenha; desenha();
+    document.getElementById('mlista').onclick = function (e) {
+      var x = e.target.closest('[data-i]'); if (!x) return;
+      var id = +x.dataset.i;
+      if (lista.indexOf(id) >= 0 && lista.indexOf(id) !== slot) { aviso('Esse item já está na build'); return; }
+      if (slot < lista.length) lista[slot] = id; else lista.push(id);
+      fechaModal(); pronto();
+    };
+  }
+  function escolheRunasCalc(s, papel, pronto) {
+    var sel = s[papel].runas.slice();
+    var ess = Object.keys(R).filter(function (id) { return ESS[id] || ESS[+id]; });
+    var outras = Object.keys(R).filter(function (id) { return !(ESS[id] || ESS[+id]) && !/^\[/.test(R[id].n); });
+    function grupo(t, l) {
+      return '<div class="grupo-runa"><h3 class="regra">' + t + '</h3><div class="escolhas">' + l.map(function (id) {
+        var r = R[id];
+        return '<div class="ico redondo' + (sel.indexOf(+id) >= 0 ? ' sel' : '') + '" data-r="' + id + '">' + img(r.i, r.n) + '<span>' + esc(r.n) + '</span></div>';
+      }).join('') + '</div></div>';
+    }
+    abreModal('Runas (1 essencial + até 4)', '<div id="rl"></div><div class="botoes"><button class="btn pri cheio" id="okR">Aplicar</button></div>');
+    function desenha() { document.getElementById('rl').innerHTML = grupo('Essencial', ess) + grupo('Demais runas', outras); }
+    desenha();
+    document.getElementById('rl').onclick = function (e) {
+      var x = e.target.closest('[data-r]'); if (!x) return;
+      var id = +x.dataset.r, i = sel.indexOf(id);
+      if (i >= 0) sel.splice(i, 1);
+      else {
+        if (ESS[id] || ESS[String(id)]) sel = sel.filter(function (q) { return !(ESS[q] || ESS[String(q)]); });
+        else if (sel.filter(function (q) { return !(ESS[q] || ESS[String(q)]); }).length >= 4) { aviso('Máximo de 4 runas além da essencial'); return; }
+        sel.push(id);
+      }
+      desenha();
+    };
+    document.getElementById('okR').onclick = function () { s[papel].runas = sel; fechaModal(); pronto(); };
+  }
+
+  /* confrontos na página do campeão: wildriftfire (rota) + guias + troca calculada */
+  function confrontosHtml(c) {
+    var f = c.fire;
+    if (!f) return '';
+    var h = '';
+    function trocaPct(aId, bId) {
+      if (!C[aId] || !C[bId] || !C[aId].calc || !C[bId].calc) return null;
+      // meio de jogo: nível 9 com os 3 primeiros itens da build pronta
+      var s = { a: lado(C[aId], 9), b: lado(C[bId], 9), autos: 2, vida: 100, desl: {}, cond: {} };
+      s.a.itens = s.a.itens.slice(0, 3); s.b.itens = s.b.itens.slice(0, 3);
+      try { var r = rodaCalc(s), i2 = rodaCalc(s, true); return [r.combo.pct, i2.combo.pct]; } catch (e) { return null; }
+    }
+    function pctT(v) { return v >= 100 ? 'abate' : f0(v) + '%'; }
+    function cartao(x, rotulo) {
+      var o = C[x.id]; if (!o) return '';
+      var t = trocaPct(c.id, x.id);
+      return '<a class="conf" href="#/c/' + encodeURIComponent(o.id) + '">' + img(o.i, o.n) + '<div><b>' + esc(o.n) + '</b><small>' + esc(rotulo) + (x.rota ? ' · ' + esc(ROTAS[x.rota]) : '') + '</small>' +
+        (t ? '<small class="troca-n">Troca: <span class="' + (t[0] > t[1] * 1.1 ? 'bom' : t[1] > t[0] * 1.1 ? 'ruim' : '') + '">' + pctT(t[0]) + '</span> × ' + pctT(t[1]) + '</small>' : '') + '</div></a>';
+    }
+    var fortes = {}, fracos = {};
+    (c.guias || []).forEach(function (g) { (g.fortes || []).forEach(function (id) { fortes[id] = 1; }); (g.fracos || []).forEach(function (id) { fracos[id] = 1; }); });
+    (f.counters || []).forEach(function (x) { fracos[x.id] = 1; });
+    var listaFracos = (f.counters || []).map(function (x) { return cartao(x, 'Counter (wildriftfire)'); }).join('') +
+      Object.keys(fracos).filter(function (id) { return !(f.counters || []).some(function (x) { return x.id === id; }); }).map(function (id) { return cartao({ id: id }, 'Fraco contra (guia)'); }).join('');
+    var listaFortes = Object.keys(fortes).filter(function (id) { return !fracos[id]; }).map(function (id) { return cartao({ id: id }, 'Forte contra (guia)'); }).join('');
+    h += '<h2 class="secao">Confrontos <small>· troca = % da vida que ' + esc(c.n) + ' tira × o que recebe, num combo no nível 9 com 3 itens da build pronta</small></h2>';
+    h += '<div class="bloco"><h3>Cuidado com</h3><div class="confs">' + (listaFracos || '<small>—</small>') + '</div></div>';
+    h += '<div class="bloco"><h3>Forte contra</h3><div class="confs">' + (listaFortes || '<small>—</small>') + '</div></div>';
+    if ((f.sinergias || []).length) h += '<div class="bloco"><h3>Combina com</h3><div class="confs">' + f.sinergias.map(function (x) {
+      var o = C[x.id]; return o ? '<a class="conf" href="#/c/' + encodeURIComponent(o.id) + '">' + img(o.i, o.n) + '<div><b>' + esc(o.n) + '</b><small>' + esc(ROTAS[x.rota] || '') + '</small></div></a>' : '';
+    }).join('') + '</div></div>';
+    if ((f.situacionais || []).length) {
+      h += '<h2 class="secao">Itens situacionais</h2>' + f.situacionais.map(function (x) {
+        return '<div class="bloco"><h3>' + esc(x.s) + '</h3><div class="icones">' + x.itens.map(icoItem).join('') + '</div></div>';
+      }).join('');
+    }
+    var rotasH = Object.keys(f.hist || {});
+    if (rotasH.length) {
+      h += '<h2 class="secao">Vitória por patch <small>· Diamante+ (wildriftfire)</small></h2><div class="hist">' + rotasH.map(function (rt) {
+        var l = f.hist[rt];
+        return '<div class="hist-r"><b>' + esc(ROTAS[rt] || rt) + '</b><div class="hist-b">' + l.map(function (x) {
+          var alt = Math.max(4, Math.min(100, (x[1] - 44) / 14 * 100));
+          return '<div class="hb" title="' + esc(x[0]) + ': ' + f2(x[1]) + '%"><i class="' + (x[1] >= 51 ? 'bom' : x[1] < 49 ? 'ruim' : '') + '" style="height:' + alt + '%"></i><span>' + esc(x[0]) + '</span><em>' + f1(x[1]) + '</em></div>';
+        }).join('') + '</div></div>';
+      }).join('') + '</div>';
+    }
+    if ((f.tags || []).length) h += '<div class="tags" style="margin-top:10px">' + f.tags.map(function (t) { return '<span class="tag">' + esc(t) + '</span>'; }).join('') + '</div>';
+    return h;
+  }
+
   navegar();
 
   // versão iPhone (PWA): o service worker guarda o app inteiro para funcionar sem internet
   if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol) && !window.Nativo) {
+    // chegou versão nova do app: recarrega uma vez para já abrir a atualização
+    var tinhaControle = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', function () {
+      if (tinhaControle && !navegar.recarregou) { navegar.recarregou = true; location.reload(); }
+    });
     navigator.serviceWorker.register('sw.js').then(function () {
       // a cada abertura, termina de guardar as imagens que ainda faltam (se o app foi fechado no meio)
       return navigator.serviceWorker.ready;
